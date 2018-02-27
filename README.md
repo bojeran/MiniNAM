@@ -11,8 +11,9 @@ Miniattack is based on:
 * Miniattack has additional python dependencies: 
     
     ```
-    pip install termdown click
+    sudo pip install termdown click
     sudo apt-get install dsniff   (for arp spoofing)
+    sudo apt-get install python-imaging-tk
     ```
 
 ### Examples
