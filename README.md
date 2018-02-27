@@ -14,6 +14,7 @@ Miniattack is based on:
     sudo pip install termdown click
     sudo apt-get install dsniff   (for arp spoofing)
     sudo apt-get install python-imaging-tk
+    sudo apt-get install bridge-utils
     ```
 
 ### Examples
