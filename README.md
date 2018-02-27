@@ -1,4 +1,56 @@
-# MiniNAM: A Network Animator for Mininet 
+# Miniattack: Visualize network attacks
+Miniattack is based on:
+   
+* modified version of MiniNAM 1.0.1 (https://github.com/uccmisl/MiniNAM)
+* Mininet 2.2.2 (https://github.com/mininet/mininet)
+
+### Installation
+
+* Follow MiniNAM's Installation section. After that you should be able to start MiniNAM.py properly.
+
+* Miniattack has additional python dependencies: 
+    
+    ```
+    pip install termdown click
+    sudo apt-get install dsniff   (for arp spoofing)
+    ```
+
+### Examples
+
+* Start arpspoof demo:
+
+  `sudo python Miniattack.py arpspoof`
+
+### Changes made to MiniNAM
+
+* Added extensible and flexible Window in Window System. Also called MDI (multiple document interface).
+
+* Added "xterm (on top)" option to context menu of Hosts.
+
+* Changed name of project to Miniattack
+
+* Removed Example Folder (see original project for old examples)
+
+* Changed "About Window" and Changed MiniNAM Version from 1.0.1 to 1.0.2
+
+* Start MiniNAM window at 1,1
+
+* Minimal cosmetic changes
+
+
+### Planned Changes to MiniNAM
+
+* Add "Start Wireshark" option to context menu of Links.
+
+### Notes to MiniNAM
+You should be able to start MiniNAM in the same way as Version 1.0.1.
+The README of MiniNAM 1.0.1 is appended.
+
+
+
+
+
+# MiniNAM: A Network Animator for Mininet
 
 A Network Animator for Visualizing Real-Time Packet Flows in Mininet
 

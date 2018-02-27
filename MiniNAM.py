@@ -14,6 +14,9 @@
 #
 # Created by Ahmed Khalid a.khalid@cs.ucc.ie and Jason Quinlan j.quinlan@cs.ucc.ie
 # 03 November 2017 - version number 1.0.1
+#
+# Extended by Bodo Brand
+# 28. February 2018 - version number 1.0.2
 
 import socket
 from struct import *
@@ -66,10 +69,12 @@ from PIL import ImageTk as itk
 import Queue
 from collections import OrderedDict
 
+
+
 MININET_VERSION = re.sub(r'[^\d\.]', '', VERSION)
 if StrictVersion(MININET_VERSION) > StrictVersion('2.0'):
     from mininet.node import IVSSwitch
-MININAM_VERSION = "1.0.1"
+MININAM_VERSION = "1.0.2"
 
 # Fix setuptools' evil madness, and open up (more?) security holes
 if 'PYTHONPATH' in os.environ:
@@ -558,8 +563,11 @@ class MiniNAM( Frame ):
 
     "A realtime network animator for Mininet."
 
-    def __init__( self, parent=None, cheight=600, cwidth=1000 , net= None, locations={}):
-
+    def __init__( self, parent=None, cheight=600, cwidth=1000 , net= None, locations={}, SubWinEvents=True):
+        """
+        :param SubWinEvents: Set to False when creating SubWindows from external script. See e.g.
+        Miniattack project.
+        """
         Frame.__init__( self, parent )
         self.action = None
 
@@ -616,6 +624,11 @@ class MiniNAM( Frame ):
         self.aboutBox = None
         self.infoBox = None
 
+        # Initialize Window in Window System
+        self.SubWindows = {}
+        # Will be used to create SubWindows during runtime
+        self.SubWindowQueue = Queue.Queue()
+
         # Initialize node data
         self.nodeBindings = self.createNodeBindings()
         self.nodePrefixes = { 'LegacyRouter': 'r', 'LegacySwitch': 's', 'Switch': 's', 'Host': 'h' , 'Controller': 'c'}
@@ -639,6 +652,7 @@ class MiniNAM( Frame ):
         self.hostPopup.add_command(label='Host Options', font=self.font)
         self.hostPopup.add_separator()
         self.hostPopup.add_command(label='Terminal', font=self.font, command=self.xterm )
+        self.hostPopup.add_command(label='Terminal (on top)', font=self.font, command=self.SubWin_xterm)
         self.hostPopup.bind("<FocusOut>", self.popupFocusOut)
 
         self.legacyRouterPopup = Menu(self.top, tearoff=0, takefocus=1)
@@ -658,8 +672,10 @@ class MiniNAM( Frame ):
         self.linkPopup.add_separator()
         self.linkPopup.add_command(label='Link Up', font=self.font, command=self.linkUp )
         self.linkPopup.add_command(label='Link Down', font=self.font, command=self.linkDown )
+        # TODO: Start Wireshark option
+        #self.linkPopup.add_separator()
+        #self.linkPopup.add_command(label='Start Wireshark', font=self.font, command=self.wireshark )
         self.linkPopup.bind("<FocusOut>", self.popupFocusOut)
-
 
         # Event handling initalization
         self.linkx = self.linky = self.linkItem = None
@@ -706,8 +722,15 @@ class MiniNAM( Frame ):
         self.TopoInfo()
         self.createNodes()
 
-        # Place window at bottom
-        self.top.geometry("%dx%d%+d%+d" % (self.cwidth, self.cheight, 1, 1000))
+        # Place window at the top
+        self.top.geometry("%dx%d%+d%+d" % (self.cwidth, self.cheight, 1, 1))
+
+        # apply geometry first before getting window position
+        self.update()
+
+        # Main Window Position (for handling SubWindows)
+        self.x = self.top.winfo_rootx()
+        self.y = self.top.winfo_rooty()
 
         # Close window gracefully
         Wm.wm_protocol( self.top, name='WM_DELETE_WINDOW', func=self.quit )
@@ -715,6 +738,41 @@ class MiniNAM( Frame ):
         #Set the logo for MiniNAM
         logo = self.images['Logo']
         self.top.tk.call('wm', 'iconphoto', self.top._w, logo)
+
+        # SubWindow Events
+        if SubWinEvents:
+            self.subWinEventsStart()
+
+    def subWinEventsStart(self):
+        """
+        Start Sub Window Event Management as late as possible to prevent Bugs during SubWindow creation time.
+        Especially useful when you try to load Sub Windows from another script.
+        """
+        # Move all Sub Windows when top Window is moved
+        self.top.bind('<Configure>', self.main_move)
+
+        class MyEvent(dict):
+            pass
+
+        tmpevent = MyEvent()
+        tmpevent.widget = self.top
+        tmpevent.x = self.x
+        tmpevent.y = self.y
+
+        self.after(100, lambda: self.main_move(tmpevent))
+        # Listen on SubWin Movements to Update their positions
+
+        # Start SubWindow Events Later to prevent any interference
+        self.after(200, self.subWinSubEventStart)
+
+
+    def subWinSubEventStart(self):
+        """
+        Will be called from SubWinEventsStart.
+        """
+        for widget in self.SubWindows:
+            widget.bind('<Configure>', self.sub_move)
+
 
     # Arguments and Network
 
@@ -1194,6 +1252,231 @@ class MiniNAM( Frame ):
             except:
                 pass
 
+    def createSubWindow(self, width=350, height=250, posx=0, posy=0, contentfunc=None, host=None, events=False, subWinReady=None, subWin=None):
+        """
+        Creates a SubWindow (Window in Window) with custom content.
+        Do not use this method directly. Instead call runCreateSubWindow.
+        """
+
+        # Check if you selected a valid node to perform operation on
+        if (self.selection is None or self.net is None or self.selection not in self.itemToWidget) and not host:
+            return
+
+        # get name of Node
+        if host:
+            name = host
+        else:
+            # gets text from widget which is equivalent to the node name
+            name = self.itemToWidget[self.selection]['text']
+
+        if name not in self.net.nameToNode:
+            return
+
+        newname = "winwin" + name
+
+        if host:
+            # find widget by name
+            for widget in self.itemToWidget:
+                if self.itemToWidget[widget]["text"] == name:
+                    refwidget = self.itemToWidget[widget]
+                    break
+        else:
+            refwidget = self.itemToWidget[self.selection]
+
+        sub = Toplevel(self, highlightbackground=refwidget['highlightbackground'],
+                       highlightcolor=refwidget['highlightcolor'], highlightthickness=3)
+        sub.transient(self)  # Keeps sub window on top of root
+        sub.attributes("-topmost", True)
+        #for item in sub.keys():
+        #    print(item)
+        #    print(sub.cget(item))
+        sub.title('"%s: %s"' % ("Node", name))
+        self.update() # required when geometry is needed immediately after creating a widget
+        winx = self.x + posx # absolute main Window position + relative position
+        winy = self.y + posy
+        lg.debug("SubWindow created on %d:%d and %dx%d\n" % (winx, winy, width, height))
+        #sub.geometry("+{0}+{1}".format(winx, winy))
+        sub.geometry("%dx%d%+d%+d" % (width, height, winx, winy))
+        sub.minsize(width, height)
+        sub.maxsize(width, height)
+
+
+        # Frame inside Toplevel container to get border color
+        fra = Frame(sub)  # bg="red"
+        fra.pack(fill=BOTH, expand=1)
+        sub.bind("<Destroy>", self.on_subclosing)
+
+        info = {"ref": name, "x": winx, "y": winy, "width":width, "height":height}
+        #lg.debug("create widget: %s\n" % (info))
+        if not self.SubWindows.has_key(sub):
+            self.SubWindows.update({sub: info})
+        else:
+            lg.fatal("Sub Window Widget for %s already exists.\n" % (name))
+            exit(1)
+
+        if events:
+            sub.bind('<Configure>', self.sub_move)
+
+        if contentfunc:
+            #wid = fra.winfo_id()
+            contentfunc(fra, self.net.get(name))
+
+        if subWinReady:
+            subWinReady.set()
+            subWin[0] = sub
+
+        #print self.tk.eval('wm stackorder ' + str(sub))
+        #print self.tk.eval('wm stackorder ' + str(sub) + ' isabove '  + str(self.top))
+        # Hack needed because sometimes the stackorder is wrong (under mobaxterm)
+        #if self.tk.eval('wm stackorder ' + str(sub) + ' isabove ' + str(self.top)) == "0":
+        #    sub.lift()
+
+        # check width, height, x, y
+        #curwidth = sub.wm_geometry().split("+")[0].split("x")[0]
+        #curheight = sub.wm_geometry().split("+")[0].split("x")[1]
+        #curx = sub.wm_geometry().split("+")[1]
+        #cury = sub.wm_geometry().split("+")[2]
+
+        #print "%s:%s" % (curx, cury)
+        #if not (curx == winx and cury == winy and curwidth == ):
+
+
+
+        #tunnelX11(self.net.get(name))
+        # self.net.get(name).popen('xterm -into %d -geometry 40x20 -sb' % wid)
+        #self.net.get(name).popen('xterm -into %d' % wid)  # -sb
+
+    def runCreateSubWindow(self, width=350, height=250, posx=0, posy=0, contentfunc=None, host=None, events=False, subWinReady=None, subWin=None):
+        """
+        Creates a SubWindow (Window in Window) with custom content. This Method is designed to be called
+        from external scripts to allow windows being created automatically during startup or runtime.
+        Make sure you start the createSubWindowLoop before or afterwards.
+
+        :param contentfunc: a function with two parameters (main_frame, node)
+        :param host: host related to window
+        :param events: please don't change the value to True. Use SubWinEventsStart when all windows got created
+        from an external script. Setting this value to True is only for usage during runtime of MiniNAM.
+        :param subWinReady: an external script could pass a threading.Event() and can use event.wait() to wait for the SubWindow
+        to be ready.
+        :param subWin: when the subWin is ready this variables contains the SubWin
+        :return:
+        """
+        command = self.createSubWindow
+        self.SubWindowQueue.put(locals()) # pass all arguments to Queue as dict
+
+    def runDestroySubWindow(self, subWin):
+        command = self.destroySubWindow
+        self.SubWindowQueue.put(locals())
+
+    def destroySubWindow(self, subWin):
+        subWin.destroy()
+
+    def SubWin_xterm(self):
+        """
+        Example for creating a SubWindow.
+        """
+
+        def SubWin_xterm_create(main_frame, node):
+            from mininet.term import tunnelX11
+
+            tunnelX11(node)
+            term = node.popen('xterm -into %d -e "bash"' % main_frame.winfo_id())
+
+            #pid = term.pid
+
+            # TODO: https://stackoverflow.com/questions/40351862/how-can-the-size-of-the-tk-embedded-xterm-be-dynamic
+            #def on_resize(event):
+            #    print pid
+            #    os.kill(pid, 28) # 28 is SIGWINCH
+
+            #main_frame.bind("<Configure>", on_resize)
+
+        # Get current Mouse Position (relative)
+        x = self.top.winfo_pointerx() - self.x
+        y = self.top.winfo_pointery() - self.y
+
+        lg.debug("Create xterm SubWindow on %d:%d" % (x, y))
+
+        self.createSubWindow(350, 250, x, y, SubWin_xterm_create, events=True)
+
+    def createSubWinLoop(self):
+        """
+        Check every 100 milliseconds if someone wants to create or destroy a SubWindow from another script.
+        To use this Feature start this loop externally just before the mainloop is started.
+        """
+        try:
+            while 1:
+                params = self.SubWindowQueue.get_nowait()
+                del params["self"]
+                func = params["command"]
+                del params["command"]
+                func(**params)
+                self.update_idletasks()
+        except Queue.Empty:
+            pass
+        self.after(100, self.createSubWinLoop)
+
+    def main_move(self, event):
+        """
+            Will be called on every scaling or movement in the GUI.
+            Move SubWindows relative to global Window.
+        """
+        if not event.widget is self.top:
+            return
+        lg.debug(event.widget)
+        deltax = event.x - self.x
+        deltay = event.y - self.y
+        self.x = event.x
+        self.y = event.y
+        # When the main window moves, adjust the sub windows to move with it
+        for widget in self.SubWindows:
+            self.SubWindows[widget]["x"] += deltax
+            self.SubWindows[widget]["y"] += deltay
+            widget.geometry("+%d+%d" % (self.SubWindows[widget]["x"], self.SubWindows[widget]["y"]))
+
+    def sub_move(self, event):
+        """
+            Will be called on every Window in Window Movement.
+        """
+        #lg.debug("%s:%s\n" % (event.x, event.y))
+        sub = event.widget
+
+        #lg.debug("%s:%s" % (event.x, event.y))
+
+        if not isinstance(sub, Toplevel):
+            return
+
+        # Set the min values
+        min_w = self.cframe.winfo_rootx()
+        min_h = self.cframe.winfo_rooty()
+        # Set the max values minus the buffer for window border
+        max_w = self.cframe.winfo_rootx() + self.cframe.winfo_width() - 15
+        max_h = self.cframe.winfo_rooty() + self.cframe.winfo_height() - 35
+        #lg.debug("min_w: %d, min_h: %d, max_w: %d, max_h: %d\n" % (min_w, min_h, max_w, max_h))
+
+        # Conditional statements to keep sub window inside main
+        if event.x < min_w:
+            sub.geometry("+{0}+{1}".format(min_w, event.y))
+
+        elif event.y < min_h:
+            sub.geometry("+{0}+{1}".format(event.x, min_h))
+
+        elif event.x + event.width > max_w:
+            sub.geometry("+{0}+{1}".format(max_w - event.width, event.y))
+
+        elif event.y + event.height > max_h:
+            sub.geometry("+{0}+{1}".format(event.x, max_h - event.height))
+
+        # Set the current sub window position
+        self.SubWindows[sub]["x"] = event.x
+        self.SubWindows[sub]["y"] = event.y
+
+    def on_subclosing(self, event):
+        """
+            When the Sub Window is closing remove reference to widget
+        """
+        self.SubWindows.pop(event.widget, None)
+
     def filterPacket(self, srcMAC, dstMAC, s_addr, d_addr, eth_protocol, ip_protocol):
         try:
             if s_addr is not None:
@@ -1471,7 +1754,7 @@ class MiniNAM( Frame ):
 
     def randColor(self):
 
-        i =0;
+        i = 0
         color = self.HOST_COLORS[i]
         try:
             while color in [node['color'] for node in self.Nodes]:
@@ -1843,19 +2126,22 @@ class MiniNAM( Frame ):
             version = 'MiniNAM ' + MININAM_VERSION
             author = 'Originally by: Ahmed Khalid <a.khalid@cs.ucc.ie>, July 2016'
             enhancements = 'Enhancements by: Ahmed Khalid, Nov 2017'
+            enhancements2 = 'Enhancements by: Bodo Brand, Feb 2018'
             www = 'https://www.ucc.ie/en/misl/research/software/mininam/'
             line1 = Label( about, text=desc, font='Helvetica 10 bold', bg=bg )
             line2 = Label( about, text=version, font='Helvetica 9', bg=bg )
             line3 = Label( about, text=author, font='Helvetica 9', bg=bg )
             line4 = Label( about, text=enhancements, font='Helvetica 9', bg=bg )
-            line5 = Entry( about, font='Helvetica 9', bg=bg, width=len(www), justify=CENTER )
-            line5.insert(0, www)
-            line5.configure(state='readonly')
+            line5 = Label(about, text=enhancements2, font='Helvetica 9', bg=bg)
+            line6 = Entry( about, font='Helvetica 9', bg=bg, width=len(www), justify=CENTER )
+            line6.insert(0, www)
+            line6.configure(state='readonly')
             line1.pack( padx=20, pady=10 )
             line2.pack(pady=10 )
             line3.pack(pady=10 )
             line4.pack(pady=10 )
             line5.pack(pady=10 )
+            line6.pack(pady=10 )
             hide = ( lambda about=about: about.withdraw() )
             self.aboutBox = about
             # Hide on close rather than destroying window
@@ -2061,6 +2347,7 @@ class MiniNAM( Frame ):
             self.net.terms += term
         else:
             self.net.terms.append(term)
+
 
     def iperf( self, _ignore=None ):
         "Make an xterm when a button is pressed."
